@@ -1,0 +1,27 @@
+namespace: granzer04
+name: gpu_facts
+version: 0.1.0
+readme: README.md
+authors:
+  - Granzer04
+description: GPU detection facts collection for Linux, Windows, and macOS
+license:
+  - MIT
+repository: https://github.com/Granzer04/ansible-collection-granzer04-gpu-facts
+issues: https://github.com/Granzer04/ansible-collection-granzer04-gpu-facts/issues
+tags:
+  - gpu
+  - hardware
+  - facts
+  - nvidia
+  - amd
+  - intel
+dependencies: {}
+build_ignore:
+  - .git
+  - .github
+  - .devcontainer
+  - .venv
+  - venv
+  - __pycache__
+  - .pytest_cache

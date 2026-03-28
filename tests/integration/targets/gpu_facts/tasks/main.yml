@@ -1,0 +1,13 @@
+---
+- name: Run gpu_facts module
+  granzer04.gpu_facts.gpu_facts:
+  register: gpu_result
+
+- name: Validate base response keys
+  ansible.builtin.assert:
+    that:
+      - gpu_result is not changed
+      - gpu_result.ansible_facts is defined
+      - gpu_result.ansible_facts.gpus is defined
+      - gpu_result.ansible_facts.gpu_count is defined
+      - gpu_result.ansible_facts.gpu_detection_errors is defined
