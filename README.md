@@ -77,6 +77,68 @@ pytest tests/unit -v
         var: ansible_facts.gpus
 ```
 
+## Example Result
+
+Example output from a host where vendor driver tools are not installed and the module falls back to a hardware scan:
+
+```yaml
+ok: [localhost] => {
+  "ansible_facts": {
+    "gpu_count": 1,
+    "gpu_detection_errors": [
+      "nvidia-smi unavailable: nvidia-smi not found",
+      "rocm-smi unavailable: rocm-smi not found",
+      "xpu-smi unavailable: xpu-smi not found"
+    ],
+    "gpus": [
+      {
+        "detection_method": "lspci",
+        "driver_detected": false,
+        "driver_version": null,
+        "index": 0,
+        "name": "NVIDIA Corporation TU104 [GeForce RTX 2080 SUPER]",
+        "pci_id": "01:00.0",
+        "temperature_c": null,
+        "utilization_pct": null,
+        "uuid": null,
+        "vendor": "nvidia",
+        "vram_free_mb": null,
+        "vram_mb": null
+      }
+    ]
+  },
+  "changed": false
+}
+```
+
+Example output when a vendor driver tool is available:
+
+```yaml
+ok: [localhost] => {
+  "ansible_facts": {
+    "gpu_count": 1,
+    "gpu_detection_errors": [],
+    "gpus": [
+      {
+        "detection_method": "nvidia-smi",
+        "driver_detected": true,
+        "driver_version": "555.12",
+        "index": 0,
+        "name": "NVIDIA GeForce RTX 4090",
+        "pci_id": "01:00.0",
+        "temperature_c": 40,
+        "utilization_pct": 10,
+        "uuid": "GPU-1234",
+        "vendor": "nvidia",
+        "vram_free_mb": 12000,
+        "vram_mb": 24576
+      }
+    ]
+  },
+  "changed": false
+}
+```
+
 ## Versioning
 
 - Start at 0.1.0
