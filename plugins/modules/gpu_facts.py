@@ -57,6 +57,13 @@ import re
 from ansible.module_utils.basic import AnsibleModule
 
 
+_PCI_VENDOR_MAP = {
+    '10DE': 'nvidia',
+    '1002': 'amd',
+    '8086': 'intel',
+}
+
+
 def _safe_int(value, default=None):
     if value is None:
         return default
@@ -89,6 +96,50 @@ def _vendor_from_name(name):
     if any(k in text for k in ('intel', 'iris', 'uhd', 'arc', 'hd graphics')):
         return 'intel'
     return 'unknown'
+
+
+def _vendor_from_pci_vendor_id(vendor_id):
+    if not vendor_id:
+        return 'unknown'
+    return _PCI_VENDOR_MAP.get(str(vendor_id).upper(), 'unknown')
+
+
+def _extract_pci_ids(value):
+    text = str(value or '')
+    ven = re.search(r'VEN_([0-9A-Fa-f]{4})', text)
+    dev = re.search(r'DEV_([0-9A-Fa-f]{4})', text)
+    vendor_id = ven.group(1).upper() if ven else None
+    device_id = dev.group(1).upper() if dev else None
+    return vendor_id, device_id
+
+
+def _normalize_windows_records(raw):
+    if raw is None:
+        return []
+    if isinstance(raw, dict):
+        return [raw]
+    if isinstance(raw, list):
+        return raw
+    return []
+
+
+def _normalize_hardware_ids(raw):
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        return [raw]
+    if isinstance(raw, list):
+        return [str(item) for item in raw if item is not None]
+    return []
+
+
+def _is_generic_windows_display_name(name):
+    text = (name or '').lower()
+    return (
+        'microsoft basic display adapter' in text
+        or 'basic display adapter' in text
+        or text.strip() in ('display adapter', 'video controller')
+    )
 
 
 def _empty_gpu(index, name='Unknown GPU', vendor='unknown', method='unknown'):
@@ -220,6 +271,62 @@ def _scan_linux_lspci(module, errors):
     return gpus
 
 
+def _scan_windows_pnp(module, errors):
+    script = (
+        '$devices = Get-PnpDevice -Class Display -ErrorAction SilentlyContinue; '
+        '$result = @(); '
+        'foreach ($d in $devices) { '
+        '  $hw = (Get-PnpDeviceProperty -InstanceId $d.InstanceId '
+        "    -KeyName 'DEVPKEY_Device_HardwareIds' -ErrorAction SilentlyContinue).Data; "
+        '  $result += [PSCustomObject]@{ '
+        '    Name=$d.FriendlyName; '
+        '    InstanceId=$d.InstanceId; '
+        '    HardwareIds=$hw; '
+        '    Status=$d.Status; '
+        '    ProblemCode=$d.Problem '
+        '  }; '
+        '} '
+        'if ($result.Count -eq 0) { $result = @() } '
+        'ConvertTo-Json -InputObject $result -Depth 4'
+    )
+    rc, out, err = _run(module, ['powershell', '-NonInteractive', '-Command', script])
+    if rc != 0:
+        errors.append('Windows PnP query failed: ' + (err or 'not available'))
+        return []
+
+    try:
+        data = json.loads(out) if out else []
+    except ValueError:
+        errors.append('Windows PnP output is not valid JSON')
+        return []
+
+    records = _normalize_windows_records(data)
+    gpus = []
+    for row in records:
+        reported_name = row.get('Name') or 'Windows GPU'
+        instance_id = row.get('InstanceId')
+        hardware_ids = _normalize_hardware_ids(row.get('HardwareIds'))
+        vendor_id, device_id = _extract_pci_ids(' '.join(hardware_ids) + ' ' + str(instance_id or ''))
+        vendor = _vendor_from_pci_vendor_id(vendor_id)
+
+        name = reported_name
+        if _is_generic_windows_display_name(name) and vendor != 'unknown':
+            suffix = f' ({device_id})' if device_id else ''
+            name = vendor.upper() + ' GPU' + suffix
+
+        gpu = _empty_gpu(len(gpus), name=name, vendor=vendor, method='windows-pnp')
+        gpu['pci_id'] = instance_id
+        gpu['pci_vendor_id'] = vendor_id
+        gpu['pci_device_id'] = device_id
+        gpu['hardware_ids'] = hardware_ids
+        gpu['reported_name'] = reported_name
+        gpu['status'] = row.get('Status')
+        gpu['problem_code'] = row.get('ProblemCode')
+        gpus.append(gpu)
+
+    return gpus
+
+
 def _scan_windows_wmi(module, errors):
     script = (
         'Get-CimInstance Win32_VideoController | '
@@ -237,22 +344,65 @@ def _scan_windows_wmi(module, errors):
         errors.append('Windows WMI output is not valid JSON')
         return []
 
-    if isinstance(data, dict):
-        data = [data]
+    records = _normalize_windows_records(data)
+    result = {}
+    for row in records:
+        key = str(row.get('PNPDeviceID') or '').upper()
+        if key:
+            result[key] = row
+    return result
 
-    gpus = []
-    for row in data:
-        name = row.get('Name', 'Windows GPU')
-        gpu = _empty_gpu(len(gpus), name=name, vendor=_vendor_from_name(name), method='wmi')
+
+def _scan_windows(module, errors):
+    pnp_gpus = _scan_windows_pnp(module, errors)
+    wmi_map = _scan_windows_wmi(module, errors)
+
+    if not pnp_gpus and wmi_map:
+        gpus = []
+        for row in wmi_map.values():
+            reported_name = row.get('Name') or 'Windows GPU'
+            vendor_id, device_id = _extract_pci_ids(row.get('PNPDeviceID'))
+            vendor = _vendor_from_pci_vendor_id(vendor_id)
+            if vendor == 'unknown':
+                vendor = _vendor_from_name(reported_name)
+            gpu = _empty_gpu(len(gpus), name=reported_name, vendor=vendor, method='windows-wmi')
+            gpu['pci_id'] = row.get('PNPDeviceID')
+            gpu['pci_vendor_id'] = vendor_id
+            gpu['pci_device_id'] = device_id
+            driver_version = row.get('DriverVersion')
+            gpu['driver_detected'] = bool(driver_version)
+            gpu['driver_version'] = driver_version
+            adapter_ram = _safe_int(row.get('AdapterRAM'))
+            if adapter_ram and adapter_ram != 4294967295:
+                gpu['vram_mb'] = adapter_ram // (1024 * 1024)
+            gpus.append(gpu)
+        return gpus
+
+    for gpu in pnp_gpus:
+        key = str(gpu.get('pci_id') or '').upper()
+        row = wmi_map.get(key)
+        if row is None and key:
+            for candidate_key, candidate in wmi_map.items():
+                if candidate_key and (candidate_key in key or key in candidate_key):
+                    row = candidate
+                    break
+        if row is None:
+            continue
+
         driver_version = row.get('DriverVersion')
         gpu['driver_detected'] = bool(driver_version)
         gpu['driver_version'] = driver_version
         adapter_ram = _safe_int(row.get('AdapterRAM'))
         if adapter_ram and adapter_ram != 4294967295:
             gpu['vram_mb'] = adapter_ram // (1024 * 1024)
-        gpu['pci_id'] = row.get('PNPDeviceID')
-        gpus.append(gpu)
-    return gpus
+
+        wmi_name = row.get('Name')
+        if wmi_name and _is_generic_windows_display_name(gpu.get('name')) and not _is_generic_windows_display_name(wmi_name):
+            gpu['name'] = wmi_name
+        if gpu.get('vendor') == 'unknown' and wmi_name:
+            gpu['vendor'] = _vendor_from_name(wmi_name)
+
+    return pnp_gpus
 
 
 def _parse_vram_mb(raw):
@@ -321,7 +471,7 @@ def gather_gpu_facts(module):
     if system == 'Linux':
         fallback = _scan_linux_lspci(module, errors)
     elif system == 'Windows':
-        fallback = _scan_windows_wmi(module, errors)
+        fallback = _scan_windows(module, errors)
     elif system == 'Darwin':
         fallback = _scan_macos_system_profiler(module, errors)
     else:

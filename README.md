@@ -19,6 +19,21 @@ An Ansible collection focused on OS-agnostic GPU detection facts.
 
 - granzer04.gpu_facts.gpu_facts
 
+## Windows Detection Strategy
+
+For Windows hosts, the module now uses a two-stage fallback path designed for offline and no-driver scenarios:
+
+1. PnP scan (primary)
+- Query display devices with `Get-PnpDevice -Class Display`.
+- Read hardware IDs with `Get-PnpDeviceProperty -KeyName DEVPKEY_Device_HardwareIds`.
+- Extract PCI vendor/device identifiers from hardware IDs.
+
+2. WMI enrichment (secondary)
+- Query `Win32_VideoController` for `DriverVersion`, `AdapterRAM`, and controller name.
+- Merge those values into the PnP result when IDs match.
+
+This approach allows detection even when the host only reports generic names such as `Microsoft Basic Display Adapter`.
+
 ## Development Setup
 
 This repository supports two workflows:
@@ -138,6 +153,15 @@ ok: [localhost] => {
   "changed": false
 }
 ```
+
+Additional Windows-oriented fields that may appear on each GPU object:
+
+- `pci_vendor_id`
+- `pci_device_id`
+- `hardware_ids`
+- `reported_name`
+- `status`
+- `problem_code`
 
 ## Versioning
 

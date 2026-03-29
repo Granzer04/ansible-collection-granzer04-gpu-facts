@@ -102,3 +102,64 @@ def test_run_returns_missing_binary_error_without_raising():
     assert rc == 1
     assert out == ''
     assert err == 'nvidia-smi not found'
+
+
+def test_extract_pci_ids_from_hardware_id_text():
+    vendor_id, device_id = gpu_facts._extract_pci_ids('PCI\\VEN_10DE&DEV_2684&SUBSYS_00000000')
+
+    assert vendor_id == '10DE'
+    assert device_id == '2684'
+
+
+def test_vendor_from_pci_vendor_id():
+    assert gpu_facts._vendor_from_pci_vendor_id('10de') == 'nvidia'
+    assert gpu_facts._vendor_from_pci_vendor_id('1002') == 'amd'
+    assert gpu_facts._vendor_from_pci_vendor_id('8086') == 'intel'
+    assert gpu_facts._vendor_from_pci_vendor_id('0000') == 'unknown'
+
+
+def test_scan_windows_merges_pnp_with_wmi_enrichment():
+    pnp_records = [
+        {
+            'Name': 'Microsoft Basic Display Adapter',
+            'InstanceId': 'PCI\\VEN_10DE&DEV_2684&SUBSYS_12345678&REV_A1\\4&123',
+            'HardwareIds': ['PCI\\VEN_10DE&DEV_2684&SUBSYS_12345678&REV_A1'],
+            'Status': 'OK',
+            'ProblemCode': 0,
+        }
+    ]
+    wmi_records = [
+        {
+            'Name': 'NVIDIA GeForce RTX 4090',
+            'AdapterRAM': 25769803776,
+            'DriverVersion': '555.12',
+            'PNPDeviceID': 'PCI\\VEN_10DE&DEV_2684&SUBSYS_12345678&REV_A1\\4&123',
+        }
+    ]
+
+    original_run = gpu_facts._run
+
+    def fake_run(module, cmd):
+        if cmd[:3] == ['powershell', '-NonInteractive', '-Command']:
+            script = cmd[3]
+            if 'Get-PnpDevice -Class Display' in script:
+                return 0, __import__('json').dumps(pnp_records), ''
+            if 'Get-CimInstance Win32_VideoController' in script:
+                return 0, __import__('json').dumps(wmi_records), ''
+        return 1, '', 'unexpected command'
+
+    try:
+        gpu_facts._run = fake_run
+        errors = []
+        gpus = gpu_facts._scan_windows(object(), errors)
+    finally:
+        gpu_facts._run = original_run
+
+    assert errors == []
+    assert len(gpus) == 1
+    assert gpus[0]['vendor'] == 'nvidia'
+    assert gpus[0]['pci_vendor_id'] == '10DE'
+    assert gpus[0]['pci_device_id'] == '2684'
+    assert gpus[0]['driver_detected'] is True
+    assert gpus[0]['driver_version'] == '555.12'
+    assert gpus[0]['vram_mb'] == 24576
