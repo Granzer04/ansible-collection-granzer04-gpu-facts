@@ -22,6 +22,16 @@ build/
 # IDE
 .vscode/settings.json
 
+# Local secrets
+.env
+.env.*
+!.env.example
+*.secret
+*.secrets
+secrets/
+ansible.cfg.local
+galaxy-token.txt
+
 # OS
 .DS_Store
 Thumbs.db
