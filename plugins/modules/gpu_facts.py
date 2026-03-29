@@ -10,44 +10,138 @@ DOCUMENTATION = r'''
 module: gpu_facts
 short_description: Gather GPU hardware and driver facts
 description:
-  - Detects GPUs using vendor driver tools when available.
-  - Falls back to hardware-level scanning when driver tools are unavailable.
-  - Supports Linux, Windows, and macOS with a normalized output schema.
+    - Collects GPU inventory and best-effort driver details using a driver-first, hardware-fallback strategy.
+    - On Linux, tries vendor utilities first and falls back to C(lspci) hardware scanning when needed.
+    - On Windows, queries Plug and Play display devices first, then enriches them with C(Win32_VideoController) data.
+    - On macOS, gathers display controller data from C(system_profiler).
+    - Returns a normalized schema so playbooks can consume one GPU fact structure across supported operating systems.
 version_added: "0.1.0"
 author:
-  - Granzer04
+    - Granzer04
 options: {}
 notes:
-  - Module is read-only and always returns changed=false.
-  - On Linux, fallback hardware scan uses C(lspci) if present.
+    - Module is read-only and always returns changed=false.
+    - Missing vendor utilities are non-fatal and are reported in C(gpu_detection_errors).
+    - On Linux, vendor utilities currently include C(nvidia-smi), C(rocm-smi), and C(xpu-smi).
+    - On Linux, fallback hardware scan uses C(lspci) if present.
+    - On Windows, the module reads display adapters from C(Get-PnpDevice -Class Display) and enriches matching devices with C(Win32_VideoController).
+    - On Windows, generic names such as C(Microsoft Basic Display Adapter) may be replaced with a bus-reported device description, a device description, or a PCI vendor/device lookup result.
+    - On Windows, PCI-based vendor detection can still work even when no vendor driver utility is installed.
+    - The exact fields populated for each GPU depend on what the host operating system exposes.
 '''
 
 EXAMPLES = r'''
 - name: Gather GPU facts
-  granzer04.gpu_facts.gpu_facts:
+    granzer04.gpu_facts.gpu_facts:
 
 - name: Show detected GPUs
-  ansible.builtin.debug:
-    var: ansible_facts.gpus
+    ansible.builtin.debug:
+        var: ansible_facts.gpus
+
+- name: Show the first detected GPU
+    ansible.builtin.debug:
+        var: ansible_facts.gpus[0]
+    when: ansible_facts.gpu_count | int > 0
+
+- name: Show non-fatal GPU detection warnings
+    ansible.builtin.debug:
+        var: ansible_facts.gpu_detection_errors
+    when: ansible_facts.gpu_detection_errors | length > 0
+
+- name: Show Windows-oriented identification fields
+    ansible.builtin.debug:
+        msg:
+            name: "{{ item.name }}"
+            reported_name: "{{ item.reported_name | default('') }}"
+            resolved_name: "{{ item.resolved_name | default('') }}"
+            pci_vendor_id: "{{ item.pci_vendor_id | default('') }}"
+            pci_device_id: "{{ item.pci_device_id | default('') }}"
+    loop: "{{ ansible_facts.gpus }}"
+    when: ansible_system == 'Win32NT'
 '''
 
 RETURN = r'''
 ansible_facts:
-  description: Facts injected into the host ansible_facts namespace.
-  returned: always
-  type: dict
-  contains:
-    gpus:
-      description: List of detected GPU devices.
-      type: list
-      elements: dict
-    gpu_count:
-      description: Total number of GPUs detected.
-      type: int
-    gpu_detection_errors:
-      description: Non-fatal detection warnings.
-      type: list
-      elements: str
+    description: Facts injected into the host ansible_facts namespace.
+    returned: always
+    type: dict
+    contains:
+        gpus:
+            description: List of detected GPU devices in a normalized schema.
+            type: list
+            elements: dict
+            contains:
+                index:
+                    description: Zero-based GPU index in the final merged result.
+                    type: int
+                name:
+                    description: Best available display name for the GPU after fallback resolution.
+                    type: str
+                vendor:
+                    description: Normalized vendor name such as C(nvidia), C(amd), C(intel), or C(unknown).
+                    type: str
+                driver_detected:
+                    description: Whether a driver version or vendor utility result was found for this GPU.
+                    type: bool
+                driver_version:
+                    description: Driver version reported by a vendor utility or operating system query when available.
+                    type: str
+                vram_mb:
+                    description: Total adapter memory in MiB when available.
+                    type: int
+                vram_free_mb:
+                    description: Free adapter memory in MiB when available from vendor tooling.
+                    type: int
+                temperature_c:
+                    description: GPU temperature in Celsius when available from vendor tooling.
+                    type: int
+                utilization_pct:
+                    description: GPU utilization percentage when available from vendor tooling.
+                    type: int
+                pci_id:
+                    description: Platform-specific bus or device identifier for the GPU.
+                    type: str
+                uuid:
+                    description: Stable device UUID when reported by the platform or vendor utility.
+                    type: str
+                detection_method:
+                    description: Source that produced the GPU record, such as C(nvidia-smi), C(lspci), C(windows-pnp), or C(windows-wmi).
+                    type: str
+                pci_vendor_id:
+                    description: PCI vendor identifier extracted from Windows device IDs when available.
+                    type: str
+                pci_device_id:
+                    description: PCI device identifier extracted from Windows device IDs when available.
+                    type: str
+                hardware_ids:
+                    description: Raw Windows hardware ID list returned by Plug and Play when available.
+                    type: list
+                    elements: str
+                reported_name:
+                    description: Original Windows-reported display adapter name before any fallback renaming.
+                    type: str
+                bus_reported_name:
+                    description: Windows bus-reported device description used as a higher-quality fallback name when available.
+                    type: str
+                device_description:
+                    description: Windows device description read from Plug and Play properties when available.
+                    type: str
+                resolved_name:
+                    description: Name resolved from PCI vendor/device lookup data when generic Windows naming needs replacement.
+                    type: str
+                status:
+                    description: Windows Plug and Play device status when available.
+                    type: str
+                problem_code:
+                    description: Windows Plug and Play problem code when available.
+                    type: int
+        gpu_count:
+            description: Total number of GPUs detected.
+            type: int
+        gpu_detection_errors:
+            description: Non-fatal detection warnings for missing tools, failed queries, or unsupported fallback paths.
+            type: list
+            elements: str
 '''
 
 import json
