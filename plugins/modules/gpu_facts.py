@@ -51,6 +51,7 @@ ansible_facts:
 '''
 
 import json
+import os
 import platform
 import re
 
@@ -62,6 +63,8 @@ _PCI_VENDOR_MAP = {
     '1002': 'amd',
     '8086': 'intel',
 }
+
+_PCI_LOOKUP_CACHE = None
 
 
 def _safe_int(value, default=None):
@@ -139,7 +142,111 @@ def _is_generic_windows_display_name(name):
         'microsoft basic display adapter' in text
         or 'basic display adapter' in text
         or text.strip() in ('display adapter', 'video controller')
+        or 'video controller (vga compatible)' in text
+        or 'vga compatible controller' in text
     )
+
+
+def _read_json_file(path):
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _load_repo_pci_lookup():
+    base = os.path.dirname(__file__)
+    lookup_path = os.path.normpath(os.path.join(base, '..', 'module_utils', 'pci_gpu_map.json'))
+    raw = _read_json_file(lookup_path)
+    if not isinstance(raw, dict):
+        return {}
+
+    result = {}
+    for vendor_id, devices in raw.items():
+        if not isinstance(devices, dict):
+            continue
+        v = str(vendor_id).upper()
+        result[v] = {str(k).upper(): str(val) for k, val in devices.items()}
+    return result
+
+
+def _load_linux_pci_ids_lookup():
+    candidates = [
+        '/usr/share/misc/pci.ids',
+        '/usr/share/hwdata/pci.ids',
+    ]
+    path = None
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            path = candidate
+            break
+    if not path:
+        return {}
+
+    lookup = {}
+    current_vendor_id = None
+    current_vendor_name = None
+
+    try:
+        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+            for raw_line in f:
+                line = raw_line.rstrip('\n')
+                if not line or line.startswith('#'):
+                    continue
+                if not line.startswith('\t'):
+                    parts = line.split(None, 1)
+                    if len(parts) != 2 or len(parts[0]) != 4:
+                        current_vendor_id = None
+                        current_vendor_name = None
+                        continue
+                    current_vendor_id = parts[0].upper()
+                    current_vendor_name = parts[1].strip()
+                    lookup.setdefault(current_vendor_id, {'_vendor_name': current_vendor_name})
+                    continue
+                if line.startswith('\t\t') or current_vendor_id is None:
+                    continue
+
+                device_parts = line.strip().split(None, 1)
+                if len(device_parts) != 2 or len(device_parts[0]) != 4:
+                    continue
+                device_id = device_parts[0].upper()
+                device_name = device_parts[1].strip()
+                vendor_label = lookup[current_vendor_id].get('_vendor_name', current_vendor_id)
+                lookup[current_vendor_id][device_id] = vendor_label + ' ' + device_name
+    except Exception:
+        return {}
+
+    return lookup
+
+
+def _get_pci_lookup():
+    global _PCI_LOOKUP_CACHE
+    if _PCI_LOOKUP_CACHE is not None:
+        return _PCI_LOOKUP_CACHE
+
+    lookup = _load_linux_pci_ids_lookup()
+    repo_lookup = _load_repo_pci_lookup()
+
+    # Repo table fills gaps and also supports non-Linux hosts.
+    for vendor_id, devices in repo_lookup.items():
+        lookup.setdefault(vendor_id, {})
+        for device_id, device_name in devices.items():
+            if device_id not in lookup[vendor_id]:
+                lookup[vendor_id][device_id] = device_name
+
+    _PCI_LOOKUP_CACHE = lookup
+    return _PCI_LOOKUP_CACHE
+
+
+def _resolve_name_from_pci_ids(vendor_id, device_id):
+    if not vendor_id or not device_id:
+        return None
+    lookup = _get_pci_lookup()
+    vendor_devices = lookup.get(str(vendor_id).upper())
+    if not isinstance(vendor_devices, dict):
+        return None
+    return vendor_devices.get(str(device_id).upper())
 
 
 def _empty_gpu(index, name='Unknown GPU', vendor='unknown', method='unknown'):
@@ -278,10 +385,16 @@ def _scan_windows_pnp(module, errors):
         'foreach ($d in $devices) { '
         '  $hw = (Get-PnpDeviceProperty -InstanceId $d.InstanceId '
         "    -KeyName 'DEVPKEY_Device_HardwareIds' -ErrorAction SilentlyContinue).Data; "
+        '  $bus = (Get-PnpDeviceProperty -InstanceId $d.InstanceId '
+        "    -KeyName 'DEVPKEY_Device_BusReportedDeviceDesc' -ErrorAction SilentlyContinue).Data; "
+        '  $desc = (Get-PnpDeviceProperty -InstanceId $d.InstanceId '
+        "    -KeyName 'DEVPKEY_Device_DeviceDesc' -ErrorAction SilentlyContinue).Data; "
         '  $result += [PSCustomObject]@{ '
         '    Name=$d.FriendlyName; '
         '    InstanceId=$d.InstanceId; '
         '    HardwareIds=$hw; '
+        '    BusReportedDeviceDesc=$bus; '
+        '    DeviceDesc=$desc; '
         '    Status=$d.Status; '
         '    ProblemCode=$d.Problem '
         '  }; '
@@ -308,11 +421,21 @@ def _scan_windows_pnp(module, errors):
         hardware_ids = _normalize_hardware_ids(row.get('HardwareIds'))
         vendor_id, device_id = _extract_pci_ids(' '.join(hardware_ids) + ' ' + str(instance_id or ''))
         vendor = _vendor_from_pci_vendor_id(vendor_id)
+        bus_reported_name = row.get('BusReportedDeviceDesc')
+        device_desc = row.get('DeviceDesc')
+        resolved_name = _resolve_name_from_pci_ids(vendor_id, device_id)
 
         name = reported_name
-        if _is_generic_windows_display_name(name) and vendor != 'unknown':
-            suffix = f' ({device_id})' if device_id else ''
-            name = vendor.upper() + ' GPU' + suffix
+        if _is_generic_windows_display_name(name):
+            if bus_reported_name:
+                name = bus_reported_name
+            elif device_desc and not _is_generic_windows_display_name(device_desc):
+                name = device_desc
+            elif resolved_name:
+                name = resolved_name
+            elif vendor != 'unknown':
+                suffix = f' ({device_id})' if device_id else ''
+                name = vendor.upper() + ' GPU' + suffix
 
         gpu = _empty_gpu(len(gpus), name=name, vendor=vendor, method='windows-pnp')
         gpu['pci_id'] = instance_id
@@ -320,6 +443,9 @@ def _scan_windows_pnp(module, errors):
         gpu['pci_device_id'] = device_id
         gpu['hardware_ids'] = hardware_ids
         gpu['reported_name'] = reported_name
+        gpu['bus_reported_name'] = bus_reported_name
+        gpu['device_description'] = device_desc
+        gpu['resolved_name'] = resolved_name
         gpu['status'] = row.get('Status')
         gpu['problem_code'] = row.get('ProblemCode')
         gpus.append(gpu)
@@ -365,10 +491,16 @@ def _scan_windows(module, errors):
             vendor = _vendor_from_pci_vendor_id(vendor_id)
             if vendor == 'unknown':
                 vendor = _vendor_from_name(reported_name)
-            gpu = _empty_gpu(len(gpus), name=reported_name, vendor=vendor, method='windows-wmi')
+            resolved_name = _resolve_name_from_pci_ids(vendor_id, device_id)
+            final_name = reported_name
+            if _is_generic_windows_display_name(final_name) and resolved_name:
+                final_name = resolved_name
+            gpu = _empty_gpu(len(gpus), name=final_name, vendor=vendor, method='windows-wmi')
             gpu['pci_id'] = row.get('PNPDeviceID')
             gpu['pci_vendor_id'] = vendor_id
             gpu['pci_device_id'] = device_id
+            gpu['resolved_name'] = resolved_name
+            gpu['reported_name'] = reported_name
             driver_version = row.get('DriverVersion')
             gpu['driver_detected'] = bool(driver_version)
             gpu['driver_version'] = driver_version

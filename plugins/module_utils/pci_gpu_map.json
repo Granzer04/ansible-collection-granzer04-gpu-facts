@@ -1,0 +1,36 @@
+{
+  "10DE": {
+    "1B80": "NVIDIA GeForce GTX 1080",
+    "1E84": "NVIDIA GeForce RTX 2080",
+    "1E87": "NVIDIA GeForce RTX 2080 SUPER",
+    "2204": "NVIDIA GeForce RTX 3080",
+    "2206": "NVIDIA GeForce RTX 3080 Ti",
+    "2208": "NVIDIA GeForce RTX 3070",
+    "220A": "NVIDIA GeForce RTX 3070 Ti",
+    "2484": "NVIDIA GeForce RTX 3060",
+    "2486": "NVIDIA GeForce RTX 3060 Ti",
+    "25A2": "NVIDIA GeForce RTX 3050",
+    "2684": "NVIDIA GeForce RTX 4090",
+    "2704": "NVIDIA GeForce RTX 4080",
+    "2782": "NVIDIA GeForce RTX 4070"
+  },
+  "1002": {
+    "67DF": "AMD Radeon RX 580",
+    "731F": "AMD Radeon RX 5700 XT",
+    "73AF": "AMD Radeon RX 7900 XTX",
+    "73BF": "AMD Radeon RX 6900 XT",
+    "73DF": "AMD Radeon RX 6700 XT",
+    "73FF": "AMD Radeon RX 6600",
+    "744C": "AMD Radeon RX 7600",
+    "747E": "AMD Radeon RX 7800 XT",
+    "7480": "AMD Radeon RX 7900 GRE"
+  },
+  "8086": {
+    "3E92": "Intel UHD Graphics 630",
+    "4680": "Intel Iris Xe Graphics",
+    "56A0": "Intel Arc A770",
+    "56A1": "Intel Arc A750",
+    "56A5": "Intel Arc A380",
+    "7D55": "Intel UHD Graphics 770"
+  }
+}

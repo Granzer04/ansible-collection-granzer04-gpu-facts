@@ -32,6 +32,11 @@ For Windows hosts, the module now uses a two-stage fallback path designed for of
 - Query `Win32_VideoController` for `DriverVersion`, `AdapterRAM`, and controller name.
 - Merge those values into the PnP result when IDs match.
 
+3. Repository-backed PCI resolution (fallback)
+- If Windows still returns a generic adapter label, the module attempts to resolve a model name from `VEN+DEV` using the repository mapping file:
+- `plugins/module_utils/pci_gpu_map.json`
+- This file is intentionally separate from code so it can be expanded over time without changing module logic.
+
 This approach allows detection even when the host only reports generic names such as `Microsoft Basic Display Adapter`.
 
 ## Development Setup
@@ -160,6 +165,9 @@ Additional Windows-oriented fields that may appear on each GPU object:
 - `pci_device_id`
 - `hardware_ids`
 - `reported_name`
+- `bus_reported_name`
+- `device_description`
+- `resolved_name`
 - `status`
 - `problem_code`
 

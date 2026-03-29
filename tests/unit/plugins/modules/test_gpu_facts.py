@@ -163,3 +163,62 @@ def test_scan_windows_merges_pnp_with_wmi_enrichment():
     assert gpus[0]['driver_detected'] is True
     assert gpus[0]['driver_version'] == '555.12'
     assert gpus[0]['vram_mb'] == 24576
+
+
+def test_resolve_name_from_pci_ids_repo_lookup():
+    original_get_lookup = gpu_facts._get_pci_lookup
+
+    try:
+        gpu_facts._get_pci_lookup = lambda: {'10DE': {'2684': 'NVIDIA GeForce RTX 4090'}}
+        assert gpu_facts._resolve_name_from_pci_ids('10DE', '2684') == 'NVIDIA GeForce RTX 4090'
+        assert gpu_facts._resolve_name_from_pci_ids('1002', '73BF') is None
+    finally:
+        gpu_facts._get_pci_lookup = original_get_lookup
+
+
+def test_scan_windows_uses_lookup_when_name_is_generic():
+    pnp_records = [
+        {
+            'Name': 'Microsoft Basic Display Adapter',
+            'InstanceId': 'PCI\\VEN_10DE&DEV_2684&SUBSYS_12345678&REV_A1\\4&123',
+            'HardwareIds': ['PCI\\VEN_10DE&DEV_2684&SUBSYS_12345678&REV_A1'],
+            'BusReportedDeviceDesc': None,
+            'DeviceDesc': 'Video Controller (VGA Compatible)',
+            'Status': 'OK',
+            'ProblemCode': 0,
+        }
+    ]
+    wmi_records = [
+        {
+            'Name': 'Microsoft Basic Display Adapter',
+            'AdapterRAM': None,
+            'DriverVersion': None,
+            'PNPDeviceID': 'PCI\\VEN_10DE&DEV_2684&SUBSYS_12345678&REV_A1\\4&123',
+        }
+    ]
+
+    original_run = gpu_facts._run
+    original_get_lookup = gpu_facts._get_pci_lookup
+
+    def fake_run(module, cmd):
+        if cmd[:3] == ['powershell', '-NonInteractive', '-Command']:
+            script = cmd[3]
+            if 'Get-PnpDevice -Class Display' in script:
+                return 0, __import__('json').dumps(pnp_records), ''
+            if 'Get-CimInstance Win32_VideoController' in script:
+                return 0, __import__('json').dumps(wmi_records), ''
+        return 1, '', 'unexpected command'
+
+    try:
+        gpu_facts._run = fake_run
+        gpu_facts._get_pci_lookup = lambda: {'10DE': {'2684': 'NVIDIA GeForce RTX 4090'}}
+        errors = []
+        gpus = gpu_facts._scan_windows(object(), errors)
+    finally:
+        gpu_facts._run = original_run
+        gpu_facts._get_pci_lookup = original_get_lookup
+
+    assert errors == []
+    assert len(gpus) == 1
+    assert gpus[0]['name'] == 'NVIDIA GeForce RTX 4090'
+    assert gpus[0]['resolved_name'] == 'NVIDIA GeForce RTX 4090'
