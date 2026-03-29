@@ -8,6 +8,11 @@ on:
 jobs:
   sanity-and-unit:
     runs-on: ubuntu-latest
+    env:
+      COLLECTION_NAMESPACE: granzer04
+      COLLECTION_NAME: gpu_facts
+      COLLECTION_ROOT: ${{ github.workspace }}/../ansible_collections
+      COLLECTION_PATH: ${{ github.workspace }}/../ansible_collections/granzer04/gpu_facts
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -22,10 +27,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
 
+      - name: Prepare collection layout for ansible-test
+        run: |
+          mkdir -p "${COLLECTION_ROOT}/${COLLECTION_NAMESPACE}"
+          ln -sfn "${GITHUB_WORKSPACE}" "${COLLECTION_PATH}"
+          test -d "${COLLECTION_PATH}"
+
       - name: Sanity tests
         run: |
+          cd "${COLLECTION_PATH}"
           ansible-test sanity plugins/modules/gpu_facts.py --test compile --test import --test ansible-doc -v
 
       - name: Unit tests
         run: |
+          cd "${COLLECTION_PATH}"
           PYTHONPATH="$PWD" pytest tests/unit -v
