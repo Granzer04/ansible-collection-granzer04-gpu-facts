@@ -63,6 +63,33 @@ def test_parse_vram_mb():
     assert gpu_facts._parse_vram_mb('unknown') is None
 
 
+def test_scan_macos_system_profiler_parses_displays_data():
+    errors = []
+    payload = __import__('json').dumps(
+        {
+            'SPDisplaysDataType': [
+                {
+                    'sppci_model': 'Apple M2',
+                    'sppci_vram': '8 GB',
+                    'sppci_bus': 'spdisplays_builtin',
+                }
+            ]
+        }
+    )
+    module = DummyModule({
+        ('system_profiler', 'SPDisplaysDataType', '-json'): (0, payload, ''),
+    })
+
+    gpus = gpu_facts._scan_macos_system_profiler(module, errors)
+
+    assert len(gpus) == 1
+    assert gpus[0]['name'] == 'Apple M2'
+    assert gpus[0]['detection_method'] == 'system_profiler'
+    assert gpus[0]['vram_mb'] == 8192
+    assert gpus[0]['pci_id'] == 'spdisplays_builtin'
+    assert errors == []
+
+
 def test_detect_nvidia_smi_parses_csv():
     errors = []
     line = '0, NVIDIA GeForce RTX 4090, 555.12, 24576, 12000, 40, 10, 00000000:01:00.0, GPU-1234'

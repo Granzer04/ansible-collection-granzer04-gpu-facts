@@ -99,7 +99,9 @@ pytest tests/unit -v
 
 ## Example Result
 
-Example output from a host where vendor driver tools are not installed and the module falls back to a hardware scan:
+### Linux fallback output (no vendor driver tools)
+
+Example output from a Linux host where vendor driver tools are not installed and the module falls back to a hardware scan:
 
 ```yaml
 ok: [localhost] => {
@@ -131,6 +133,8 @@ ok: [localhost] => {
 }
 ```
 
+### Linux driver-tool output (AMD)
+
 Example output when an AMD driver tool is available:
 
 ```yaml
@@ -159,6 +163,8 @@ ok: [localhost] => {
 }
 ```
 
+### Linux driver-tool output (NVIDIA)
+
 Example output when an NVIDIA driver tool is available:
 
 ```yaml
@@ -180,6 +186,79 @@ ok: [localhost] => {
         "vendor": "nvidia",
         "vram_free_mb": 12000,
         "vram_mb": 24576
+      }
+    ]
+  },
+  "changed": false
+}
+```
+
+### Windows fallback + WMI-enriched output
+
+Example output from a Windows host where PnP data is enriched with WMI details and generic names are resolved via PCI identifiers when possible:
+
+```yaml
+ok: [windows-host] => {
+  "ansible_facts": {
+    "gpu_count": 1,
+    "gpu_detection_errors": [],
+    "gpus": [
+      {
+        "bus_reported_name": "NVIDIA GeForce RTX 4090",
+        "detection_method": "windows-pnp",
+        "device_description": "Video Controller (VGA Compatible)",
+        "driver_detected": true,
+        "driver_version": "555.12",
+        "hardware_ids": [
+          "PCI\\VEN_10DE&DEV_2684&SUBSYS_12345678&REV_A1"
+        ],
+        "index": 0,
+        "name": "NVIDIA GeForce RTX 4090",
+        "pci_device_id": "2684",
+        "pci_id": "PCI\\VEN_10DE&DEV_2684&SUBSYS_12345678&REV_A1\\4&123",
+        "pci_vendor_id": "10DE",
+        "problem_code": 0,
+        "reported_name": "Microsoft Basic Display Adapter",
+        "resolved_name": "NVIDIA GeForce RTX 4090",
+        "status": "OK",
+        "temperature_c": null,
+        "utilization_pct": null,
+        "uuid": null,
+        "vendor": "nvidia",
+        "vram_free_mb": null,
+        "vram_mb": 24576
+      }
+    ]
+  },
+  "changed": false
+}
+```
+
+### macOS system_profiler output
+
+Example output from a macOS host using the `system_profiler` fallback path:
+
+```yaml
+ok: [macos-host] => {
+  "ansible_facts": {
+    "gpu_count": 1,
+    "gpu_detection_errors": [
+      "nvidia-smi unavailable: nvidia-smi not found"
+    ],
+    "gpus": [
+      {
+        "detection_method": "system_profiler",
+        "driver_detected": false,
+        "driver_version": null,
+        "index": 0,
+        "name": "Apple M2",
+        "pci_id": "spdisplays_builtin",
+        "temperature_c": null,
+        "utilization_pct": null,
+        "uuid": null,
+        "vendor": "unknown",
+        "vram_free_mb": null,
+        "vram_mb": 8192
       }
     ]
   },

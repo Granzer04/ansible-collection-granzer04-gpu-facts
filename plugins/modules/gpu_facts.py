@@ -48,6 +48,16 @@ EXAMPLES = r'''
         var: ansible_facts.gpu_detection_errors
     when: ansible_facts.gpu_detection_errors | length > 0
 
+- name: Show Linux fallback-oriented fields
+    ansible.builtin.debug:
+        msg:
+            name: "{{ item.name }}"
+            vendor: "{{ item.vendor }}"
+            detection_method: "{{ item.detection_method }}"
+            pci_id: "{{ item.pci_id | default('') }}"
+    loop: "{{ ansible_facts.gpus }}"
+    when: ansible_system == 'Linux'
+
 - name: Show Windows-oriented identification fields
     ansible.builtin.debug:
         msg:
@@ -58,6 +68,16 @@ EXAMPLES = r'''
             pci_device_id: "{{ item.pci_device_id | default('') }}"
     loop: "{{ ansible_facts.gpus }}"
     when: ansible_system == 'Win32NT'
+
+- name: Show macOS-oriented display fields
+    ansible.builtin.debug:
+        msg:
+            name: "{{ item.name }}"
+            vendor: "{{ item.vendor }}"
+            detection_method: "{{ item.detection_method }}"
+            vram_mb: "{{ item.vram_mb | default('') }}"
+    loop: "{{ ansible_facts.gpus }}"
+    when: ansible_system == 'Darwin'
 '''
 
 RETURN = r'''
