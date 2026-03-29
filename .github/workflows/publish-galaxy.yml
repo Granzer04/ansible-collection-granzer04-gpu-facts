@@ -1,0 +1,105 @@
+name: publish-galaxy
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    env:
+      COLLECTION_NAMESPACE: granzer04
+      COLLECTION_NAME: gpu_facts
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Prepare collection layout for ansible-test
+        run: |
+          set -euo pipefail
+          COLLECTION_ROOT="${RUNNER_TEMP}/ansible_collections"
+          COLLECTION_PATH="${COLLECTION_ROOT}/${COLLECTION_NAMESPACE}/${COLLECTION_NAME}"
+          echo "COLLECTION_PATH=${COLLECTION_PATH}" >> "$GITHUB_ENV"
+          mkdir -p "${COLLECTION_ROOT}/${COLLECTION_NAMESPACE}"
+          rm -rf "${COLLECTION_PATH}"
+          mkdir -p "${COLLECTION_PATH}"
+          tar -C "${GITHUB_WORKSPACE}" -cf - . | tar -C "${COLLECTION_PATH}" -xf -
+          test -d "${COLLECTION_PATH}"
+
+      - name: Sanity tests
+        run: |
+          set -euo pipefail
+          cd "${COLLECTION_PATH}"
+          ansible-test sanity plugins/modules/gpu_facts.py --test compile --test import --test ansible-doc -v
+
+      - name: Unit tests
+        run: |
+          set -euo pipefail
+          cd "${COLLECTION_PATH}"
+          PYTHONPATH="$PWD" pytest tests/unit -v
+
+  publish:
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Verify tag matches galaxy.yml version
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          FILE_VERSION=$(grep -E '^version:' galaxy.yml | head -n1 | cut -d':' -f2- | xargs)
+          if [ -z "${FILE_VERSION:-}" ]; then
+            echo "Unable to determine version from galaxy.yml"
+            exit 1
+          fi
+          if [ "$TAG_VERSION" != "$FILE_VERSION" ]; then
+            echo "Tag version ($TAG_VERSION) does not match galaxy.yml version ($FILE_VERSION)."
+            exit 1
+          fi
+
+      - name: Build collection artifact
+        run: |
+          set -euo pipefail
+          ansible-galaxy collection build --force
+          ls -lah *.tar.gz
+
+      - name: Publish to Ansible Galaxy
+        env:
+          ANSIBLE_GALAXY_TOKEN: ${{ secrets.ANSIBLE_GALAXY_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ANSIBLE_GALAXY_TOKEN:-}" ]; then
+            echo "ANSIBLE_GALAXY_TOKEN secret is not set."
+            exit 1
+          fi
+          ARTIFACT=$(ls -1 *.tar.gz | head -n1)
+          ansible-galaxy collection publish "$ARTIFACT" --token "$ANSIBLE_GALAXY_TOKEN"
