@@ -27,7 +27,8 @@ notes:
     - On Windows, the module reads display adapters from C(Get-PnpDevice -Class Display) and enriches matching devices with C(Win32_VideoController).
     - On Windows, generic names such as C(Microsoft Basic Display Adapter) may be replaced with a bus-reported device description, a device description, or a PCI vendor/device lookup result.
     - On Windows, PCI-based vendor detection can still work even when no vendor driver utility is installed.
-    - Model resolution uses a merged offline lookup chain from system PCI databases, bundled PCI IDs, and repository mappings.
+    - Model resolution uses a merged offline lookup chain in this order: Linux system PCI database, bundled repository PCI IDs, then curated repository mappings.
+    - Bundled repository PCI IDs are intended to be refreshed at release time from upstream PCI ID sources.
     - The exact fields populated for each GPU depend on what the host operating system exposes.
 '''
 

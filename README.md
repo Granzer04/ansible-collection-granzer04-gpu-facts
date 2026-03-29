@@ -39,6 +39,42 @@ For Windows hosts, the module now uses a two-stage fallback path designed for of
 
 This approach allows detection even when the host only reports generic names such as `Microsoft Basic Display Adapter`.
 
+## PCI ID Coverage Strategy
+
+Model resolution uses an offline source chain in this order:
+
+1. Linux system PCI database (`/usr/share/misc/pci.ids` or `/usr/share/hwdata/pci.ids`)
+2. Bundled repository PCI data (`plugins/module_utils/pci.ids`)
+3. Curated override map (`plugins/module_utils/pci_gpu_map.json`)
+
+The bundled source is generated from upstream `pci.ids` data for GPU vendors and refreshed at release time.
+
+### Refresh bundled PCI IDs (maintainers)
+
+Run from repository root:
+
+```powershell
+python scripts/refresh-pci-ids.py
+```
+
+Optional local source file:
+
+```powershell
+python scripts/refresh-pci-ids.py --source C:\path\to\pci.ids
+```
+
+By default, the refresh includes NVIDIA (`10DE`), AMD (`1002`), and Intel (`8086`) PCI vendor IDs.
+
+## Release Quality Gates
+
+Before tagging a release, validate all of the following:
+
+1. Parser tests cover normal, malformed, class-section, and subsystem-line inputs.
+2. Merge precedence tests pass for Linux system source, bundled snapshot, and curated overrides.
+3. Linux fallback order regression passes (`lspci` primary, sysfs secondary only when `lspci` is unavailable).
+4. Windows and macOS behavior tests remain green.
+5. Unit test suite passes after PCI refresh updates.
+
 ## Development Setup
 
 This repository supports two workflows:

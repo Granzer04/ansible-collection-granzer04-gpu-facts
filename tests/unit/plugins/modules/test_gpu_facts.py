@@ -234,6 +234,32 @@ def test_parse_pci_ids_lookup_file_parses_vendor_and_devices():
     assert lookup['1002']['744C'] == 'AMD Navi 31 [Radeon RX 7900 XTX]'
 
 
+def test_parse_pci_ids_lookup_file_ignores_class_subsystem_and_malformed_lines():
+    sample = (
+        "# Comment\n"
+        "C 03  Display controller\n"
+        "10de  NVIDIA Corporation\n"
+        "\t2684  AD102 [GeForce RTX 4090]\n"
+        "\t\t1043 87B1  Board Subsystem Name\n"
+        "\tnothex  malformed\n"
+        "1002  Advanced Micro Devices, Inc. [AMD/ATI]\n"
+        "\t744c  Navi 31 [Radeon RX 7900 XTX]\n"
+    )
+    with tempfile.NamedTemporaryFile('w', delete=False, encoding='utf-8') as tmp:
+        tmp.write(sample)
+        path = tmp.name
+
+    try:
+        lookup = gpu_facts._parse_pci_ids_lookup_file(path)
+    finally:
+        Path(path).unlink(missing_ok=True)
+
+    assert lookup['10DE']['2684'] == 'NVIDIA Corporation AD102 [GeForce RTX 4090]'
+    assert lookup['1002']['744C'] == 'Advanced Micro Devices, Inc. [AMD/ATI] Navi 31 [Radeon RX 7900 XTX]'
+    assert '1043' not in lookup['10DE']
+    assert 'NOTHEX' not in lookup['10DE']
+
+
 def test_get_pci_lookup_merges_linux_packaged_and_repo_sources():
     original_cache = gpu_facts._PCI_LOOKUP_CACHE
     original_linux = gpu_facts._load_linux_pci_ids_lookup
@@ -417,3 +443,112 @@ def test_scan_linux_sysfs_fallback_name_when_lookup_misses():
     assert '1002' in gpus[0]['name']
     assert 'AAAA' in gpus[0]['name']
     assert gpus[0]['detection_method'] == 'sysfs'
+
+
+def test_gather_gpu_facts_linux_uses_lspci_before_sysfs():
+    original_system = gpu_facts.platform.system
+    original_detect_nvidia = gpu_facts._detect_nvidia_smi
+    original_detect_rocm = gpu_facts._detect_rocm_smi
+    original_detect_xpu = gpu_facts._detect_xpu_smi
+    original_scan_lspci = gpu_facts._scan_linux_lspci
+    original_scan_sysfs = gpu_facts._scan_linux_sysfs
+
+    calls = {'lspci': 0, 'sysfs': 0}
+
+    def fake_scan_lspci(module, errors):
+        calls['lspci'] += 1
+        return [{
+            'index': 0,
+            'name': 'Intel Corporation UHD Graphics 770',
+            'vendor': 'intel',
+            'driver_detected': False,
+            'driver_version': None,
+            'vram_mb': None,
+            'vram_free_mb': None,
+            'temperature_c': None,
+            'utilization_pct': None,
+            'pci_id': '00:02.0',
+            'uuid': None,
+            'detection_method': 'lspci',
+        }]
+
+    def fake_scan_sysfs(errors):
+        calls['sysfs'] += 1
+        return []
+
+    try:
+        gpu_facts.platform.system = lambda: 'Linux'
+        gpu_facts._detect_nvidia_smi = lambda module, errors: []
+        gpu_facts._detect_rocm_smi = lambda module, errors: []
+        gpu_facts._detect_xpu_smi = lambda module, errors: []
+        gpu_facts._scan_linux_lspci = fake_scan_lspci
+        gpu_facts._scan_linux_sysfs = fake_scan_sysfs
+
+        facts = gpu_facts.gather_gpu_facts(object())
+    finally:
+        gpu_facts.platform.system = original_system
+        gpu_facts._detect_nvidia_smi = original_detect_nvidia
+        gpu_facts._detect_rocm_smi = original_detect_rocm
+        gpu_facts._detect_xpu_smi = original_detect_xpu
+        gpu_facts._scan_linux_lspci = original_scan_lspci
+        gpu_facts._scan_linux_sysfs = original_scan_sysfs
+
+    assert calls['lspci'] == 1
+    assert calls['sysfs'] == 0
+    assert facts['gpu_count'] == 1
+    assert facts['gpus'][0]['detection_method'] == 'lspci'
+
+
+def test_gather_gpu_facts_linux_falls_back_to_sysfs_when_lspci_unavailable():
+    original_system = gpu_facts.platform.system
+    original_detect_nvidia = gpu_facts._detect_nvidia_smi
+    original_detect_rocm = gpu_facts._detect_rocm_smi
+    original_detect_xpu = gpu_facts._detect_xpu_smi
+    original_scan_lspci = gpu_facts._scan_linux_lspci
+    original_scan_sysfs = gpu_facts._scan_linux_sysfs
+
+    calls = {'lspci': 0, 'sysfs': 0}
+
+    def fake_scan_lspci(module, errors):
+        calls['lspci'] += 1
+        errors.append('lspci unavailable: lspci not found')
+        return []
+
+    def fake_scan_sysfs(errors):
+        calls['sysfs'] += 1
+        return [{
+            'index': 0,
+            'name': 'NVIDIA GPU [10DE:2684]',
+            'vendor': 'nvidia',
+            'driver_detected': False,
+            'driver_version': None,
+            'vram_mb': None,
+            'vram_free_mb': None,
+            'temperature_c': None,
+            'utilization_pct': None,
+            'pci_id': '0000_01_00.0',
+            'uuid': None,
+            'detection_method': 'sysfs',
+        }]
+
+    try:
+        gpu_facts.platform.system = lambda: 'Linux'
+        gpu_facts._detect_nvidia_smi = lambda module, errors: []
+        gpu_facts._detect_rocm_smi = lambda module, errors: []
+        gpu_facts._detect_xpu_smi = lambda module, errors: []
+        gpu_facts._scan_linux_lspci = fake_scan_lspci
+        gpu_facts._scan_linux_sysfs = fake_scan_sysfs
+
+        facts = gpu_facts.gather_gpu_facts(object())
+    finally:
+        gpu_facts.platform.system = original_system
+        gpu_facts._detect_nvidia_smi = original_detect_nvidia
+        gpu_facts._detect_rocm_smi = original_detect_rocm
+        gpu_facts._detect_xpu_smi = original_detect_xpu
+        gpu_facts._scan_linux_lspci = original_scan_lspci
+        gpu_facts._scan_linux_sysfs = original_scan_sysfs
+
+    assert calls['lspci'] == 1
+    assert calls['sysfs'] == 1
+    assert facts['gpu_count'] == 1
+    assert facts['gpus'][0]['detection_method'] == 'sysfs'
