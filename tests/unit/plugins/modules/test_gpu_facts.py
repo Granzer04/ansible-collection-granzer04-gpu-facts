@@ -3,6 +3,7 @@ from __future__ import absolute_import, division, print_function
 __metaclass__ = type
 
 import sys
+import tempfile
 import types
 from pathlib import Path
 
@@ -215,6 +216,45 @@ def test_resolve_name_from_pci_ids_repo_lookup_multi_vendor():
         assert gpu_facts._resolve_name_from_pci_ids('8086', '56A0') == 'Intel Arc A770'
     finally:
         gpu_facts._get_pci_lookup = original_get_lookup
+
+
+def test_parse_pci_ids_lookup_file_parses_vendor_and_devices():
+    sample = "10de  NVIDIA Corporation\n\t2684  AD102 [GeForce RTX 4090]\n1002  AMD\n\t744c  Navi 31 [Radeon RX 7900 XTX]\n"
+    with tempfile.NamedTemporaryFile('w', delete=False, encoding='utf-8') as tmp:
+        tmp.write(sample)
+        path = tmp.name
+
+    try:
+        lookup = gpu_facts._parse_pci_ids_lookup_file(path)
+    finally:
+        Path(path).unlink(missing_ok=True)
+
+    assert lookup['10DE']['2684'] == 'NVIDIA Corporation AD102 [GeForce RTX 4090]'
+    assert lookup['1002']['744C'] == 'AMD Navi 31 [Radeon RX 7900 XTX]'
+
+
+def test_get_pci_lookup_merges_linux_packaged_and_repo_sources():
+    original_cache = gpu_facts._PCI_LOOKUP_CACHE
+    original_linux = gpu_facts._load_linux_pci_ids_lookup
+    original_packaged = gpu_facts._load_packaged_pci_ids_lookup
+    original_repo = gpu_facts._load_repo_pci_lookup
+
+    try:
+        gpu_facts._PCI_LOOKUP_CACHE = None
+        gpu_facts._load_linux_pci_ids_lookup = lambda: {'10DE': {'2684': 'Linux Name'}}
+        gpu_facts._load_packaged_pci_ids_lookup = lambda: {'10DE': {'2204': 'Packaged Name'}}
+        gpu_facts._load_repo_pci_lookup = lambda: {'10DE': {'2782': 'Repo Name'}}
+
+        lookup = gpu_facts._get_pci_lookup()
+    finally:
+        gpu_facts._PCI_LOOKUP_CACHE = original_cache
+        gpu_facts._load_linux_pci_ids_lookup = original_linux
+        gpu_facts._load_packaged_pci_ids_lookup = original_packaged
+        gpu_facts._load_repo_pci_lookup = original_repo
+
+    assert lookup['10DE']['2684'] == 'Linux Name'
+    assert lookup['10DE']['2204'] == 'Packaged Name'
+    assert lookup['10DE']['2782'] == 'Repo Name'
 
 
 def test_scan_windows_uses_lookup_when_name_is_generic():

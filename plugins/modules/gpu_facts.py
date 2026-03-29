@@ -27,6 +27,7 @@ notes:
     - On Windows, the module reads display adapters from C(Get-PnpDevice -Class Display) and enriches matching devices with C(Win32_VideoController).
     - On Windows, generic names such as C(Microsoft Basic Display Adapter) may be replaced with a bus-reported device description, a device description, or a PCI vendor/device lookup result.
     - On Windows, PCI-based vendor detection can still work even when no vendor driver utility is installed.
+    - Model resolution uses a merged offline lookup chain from system PCI databases, bundled PCI IDs, and repository mappings.
     - The exact fields populated for each GPU depend on what the host operating system exposes.
 '''
 
@@ -285,19 +286,7 @@ def _load_repo_pci_lookup():
     return result
 
 
-def _load_linux_pci_ids_lookup():
-    candidates = [
-        '/usr/share/misc/pci.ids',
-        '/usr/share/hwdata/pci.ids',
-    ]
-    path = None
-    for candidate in candidates:
-        if os.path.exists(candidate):
-            path = candidate
-            break
-    if not path:
-        return {}
-
+def _parse_pci_ids_lookup_file(path):
     lookup = {}
     current_vendor_id = None
     current_vendor_name = None
@@ -334,20 +323,48 @@ def _load_linux_pci_ids_lookup():
     return lookup
 
 
+def _load_linux_pci_ids_lookup():
+    candidates = [
+        '/usr/share/misc/pci.ids',
+        '/usr/share/hwdata/pci.ids',
+    ]
+    path = None
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            path = candidate
+            return _parse_pci_ids_lookup_file(path)
+    return {}
+
+
+def _load_packaged_pci_ids_lookup():
+    base = os.path.dirname(__file__)
+    packaged_path = os.path.normpath(os.path.join(base, '..', 'module_utils', 'pci.ids'))
+    if not os.path.exists(packaged_path):
+        return {}
+    return _parse_pci_ids_lookup_file(packaged_path)
+
+
+def _merge_lookup(dst, src):
+    if not isinstance(src, dict):
+        return
+    for vendor_id, devices in src.items():
+        if not isinstance(devices, dict):
+            continue
+        dst.setdefault(vendor_id, {})
+        for device_id, device_name in devices.items():
+            if device_id not in dst[vendor_id]:
+                dst[vendor_id][device_id] = device_name
+
+
 def _get_pci_lookup():
     global _PCI_LOOKUP_CACHE
     if _PCI_LOOKUP_CACHE is not None:
         return _PCI_LOOKUP_CACHE
 
     lookup = _load_linux_pci_ids_lookup()
-    repo_lookup = _load_repo_pci_lookup()
-
-    # Repo table fills gaps and also supports non-Linux hosts.
-    for vendor_id, devices in repo_lookup.items():
-        lookup.setdefault(vendor_id, {})
-        for device_id, device_name in devices.items():
-            if device_id not in lookup[vendor_id]:
-                lookup[vendor_id][device_id] = device_name
+    _merge_lookup(lookup, _load_packaged_pci_ids_lookup())
+    # Repo table fills gaps and supports explicit curated overrides.
+    _merge_lookup(lookup, _load_repo_pci_lookup())
 
     _PCI_LOOKUP_CACHE = lookup
     return _PCI_LOOKUP_CACHE
