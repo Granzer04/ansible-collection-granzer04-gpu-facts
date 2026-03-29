@@ -11,8 +11,8 @@ jobs:
     env:
       COLLECTION_NAMESPACE: granzer04
       COLLECTION_NAME: gpu_facts
-      COLLECTION_ROOT: ${{ github.workspace }}/../ansible_collections
-      COLLECTION_PATH: ${{ github.workspace }}/../ansible_collections/granzer04/gpu_facts
+      COLLECTION_ROOT: ${{ runner.temp }}/ansible_collections
+      COLLECTION_PATH: ${{ runner.temp }}/ansible_collections/granzer04/gpu_facts
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -30,7 +30,9 @@ jobs:
       - name: Prepare collection layout for ansible-test
         run: |
           mkdir -p "${COLLECTION_ROOT}/${COLLECTION_NAMESPACE}"
-          ln -sfn "${GITHUB_WORKSPACE}" "${COLLECTION_PATH}"
+          rm -rf "${COLLECTION_PATH}"
+          mkdir -p "${COLLECTION_PATH}"
+          tar -C "${GITHUB_WORKSPACE}" -cf - . | tar -C "${COLLECTION_PATH}" -xf -
           test -d "${COLLECTION_PATH}"
 
       - name: Sanity tests
