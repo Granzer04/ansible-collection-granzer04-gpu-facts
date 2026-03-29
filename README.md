@@ -4,7 +4,7 @@ An Ansible collection focused on OS-agnostic GPU detection facts.
 
 ## Goals
 
-- Detect NVIDIA, AMD, and Intel GPUs.
+- Detect AMD, Intel, and NVIDIA GPUs.
 - Work across Linux, Windows, and macOS.
 - Prefer driver tooling when present.
 - Fall back to hardware scan when drivers are missing.
@@ -116,12 +116,12 @@ ok: [localhost] => {
         "driver_detected": false,
         "driver_version": null,
         "index": 0,
-        "name": "NVIDIA Corporation TU104 [GeForce RTX 2080 SUPER]",
+        "name": "Intel Corporation UHD Graphics 770",
         "pci_id": "01:00.0",
         "temperature_c": null,
         "utilization_pct": null,
         "uuid": null,
-        "vendor": "nvidia",
+        "vendor": "intel",
         "vram_free_mb": null,
         "vram_mb": null
       }
@@ -131,7 +131,35 @@ ok: [localhost] => {
 }
 ```
 
-Example output when a vendor driver tool is available:
+Example output when an AMD driver tool is available:
+
+```yaml
+ok: [localhost] => {
+  "ansible_facts": {
+    "gpu_count": 1,
+    "gpu_detection_errors": [],
+    "gpus": [
+      {
+        "detection_method": "rocm-smi",
+        "driver_detected": true,
+        "driver_version": "6.0.0",
+        "index": 0,
+        "name": "AMD Radeon RX 7900 XTX",
+        "pci_id": "01:00.0",
+        "temperature_c": null,
+        "utilization_pct": null,
+        "uuid": null,
+        "vendor": "amd",
+        "vram_free_mb": null,
+        "vram_mb": 24576
+      }
+    ]
+  },
+  "changed": false
+}
+```
+
+Example output when an NVIDIA driver tool is available:
 
 ```yaml
 ok: [localhost] => {

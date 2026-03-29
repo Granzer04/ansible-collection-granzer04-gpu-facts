@@ -176,6 +176,20 @@ def test_resolve_name_from_pci_ids_repo_lookup():
         gpu_facts._get_pci_lookup = original_get_lookup
 
 
+def test_resolve_name_from_pci_ids_repo_lookup_multi_vendor():
+    original_get_lookup = gpu_facts._get_pci_lookup
+
+    try:
+        gpu_facts._get_pci_lookup = lambda: {
+            '1002': {'744C': 'AMD Radeon RX 7900 XTX'},
+            '8086': {'56A0': 'Intel Arc A770'},
+        }
+        assert gpu_facts._resolve_name_from_pci_ids('1002', '744C') == 'AMD Radeon RX 7900 XTX'
+        assert gpu_facts._resolve_name_from_pci_ids('8086', '56A0') == 'Intel Arc A770'
+    finally:
+        gpu_facts._get_pci_lookup = original_get_lookup
+
+
 def test_scan_windows_uses_lookup_when_name_is_generic():
     pnp_records = [
         {
@@ -222,3 +236,52 @@ def test_scan_windows_uses_lookup_when_name_is_generic():
     assert len(gpus) == 1
     assert gpus[0]['name'] == 'NVIDIA GeForce RTX 4090'
     assert gpus[0]['resolved_name'] == 'NVIDIA GeForce RTX 4090'
+
+
+def test_scan_windows_uses_lookup_when_name_is_generic_amd():
+    pnp_records = [
+        {
+            'Name': 'Microsoft Basic Display Adapter',
+            'InstanceId': 'PCI\\VEN_1002&DEV_744C&SUBSYS_12345678&REV_C8\\4&123',
+            'HardwareIds': ['PCI\\VEN_1002&DEV_744C&SUBSYS_12345678&REV_C8'],
+            'BusReportedDeviceDesc': None,
+            'DeviceDesc': 'Display Adapter',
+            'Status': 'OK',
+            'ProblemCode': 0,
+        }
+    ]
+    wmi_records = [
+        {
+            'Name': 'Microsoft Basic Display Adapter',
+            'AdapterRAM': None,
+            'DriverVersion': None,
+            'PNPDeviceID': 'PCI\\VEN_1002&DEV_744C&SUBSYS_12345678&REV_C8\\4&123',
+        }
+    ]
+
+    original_run = gpu_facts._run
+    original_get_lookup = gpu_facts._get_pci_lookup
+
+    def fake_run(module, cmd):
+        if cmd[:3] == ['powershell', '-NonInteractive', '-Command']:
+            script = cmd[3]
+            if 'Get-PnpDevice -Class Display' in script:
+                return 0, __import__('json').dumps(pnp_records), ''
+            if 'Get-CimInstance Win32_VideoController' in script:
+                return 0, __import__('json').dumps(wmi_records), ''
+        return 1, '', 'unexpected command'
+
+    try:
+        gpu_facts._run = fake_run
+        gpu_facts._get_pci_lookup = lambda: {'1002': {'744C': 'AMD Radeon RX 7900 XTX'}}
+        errors = []
+        gpus = gpu_facts._scan_windows(object(), errors)
+    finally:
+        gpu_facts._run = original_run
+        gpu_facts._get_pci_lookup = original_get_lookup
+
+    assert errors == []
+    assert len(gpus) == 1
+    assert gpus[0]['vendor'] == 'amd'
+    assert gpus[0]['name'] == 'AMD Radeon RX 7900 XTX'
+    assert gpus[0]['resolved_name'] == 'AMD Radeon RX 7900 XTX'

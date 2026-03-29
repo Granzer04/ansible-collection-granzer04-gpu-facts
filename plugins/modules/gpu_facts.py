@@ -22,7 +22,7 @@ options: {}
 notes:
     - Module is read-only and always returns changed=false.
     - Missing vendor utilities are non-fatal and are reported in C(gpu_detection_errors).
-    - On Linux, vendor utilities currently include C(nvidia-smi), C(rocm-smi), and C(xpu-smi).
+    - On Linux, vendor utilities currently include C(rocm-smi) for AMD, C(xpu-smi) for Intel, and C(nvidia-smi) for NVIDIA.
     - On Linux, fallback hardware scan uses C(lspci) if present.
     - On Windows, the module reads display adapters from C(Get-PnpDevice -Class Display) and enriches matching devices with C(Win32_VideoController).
     - On Windows, generic names such as C(Microsoft Basic Display Adapter) may be replaced with a bus-reported device description, a device description, or a PCI vendor/device lookup result.
@@ -389,7 +389,7 @@ def _detect_nvidia_smi(module, errors):
         gpus.append(
             {
                 'index': _safe_int(info.get('index'), len(gpus)),
-                'name': info.get('name', 'NVIDIA GPU'),
+                'name': info.get('name', 'GPU Device'),
                 'vendor': 'nvidia',
                 'driver_detected': True,
                 'driver_version': info.get('driver_version'),
