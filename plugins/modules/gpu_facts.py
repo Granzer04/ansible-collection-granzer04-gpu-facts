@@ -11,7 +11,7 @@ module: gpu_facts
 short_description: Gather GPU hardware and driver facts
 description:
     - Collects GPU inventory and best-effort driver details using a driver-first, hardware-fallback strategy.
-    - On Linux, tries vendor utilities first and falls back to C(lspci) hardware scanning when needed.
+    - On Linux, tries vendor utilities first, falls back to C(lspci) hardware scanning, or kernel sysfs when C(lspci) is unavailable.
     - On Windows, queries Plug and Play display devices first, then enriches them with C(Win32_VideoController) data.
     - On macOS, gathers display controller data from C(system_profiler).
     - Returns a normalized schema so playbooks can consume one GPU fact structure across supported operating systems.
@@ -23,7 +23,7 @@ notes:
     - Module is read-only and always returns changed=false.
     - Missing vendor utilities are non-fatal and are reported in C(gpu_detection_errors).
     - On Linux, vendor utilities currently include C(rocm-smi) for AMD, C(xpu-smi) for Intel, and C(nvidia-smi) for NVIDIA.
-    - On Linux, fallback hardware scan uses C(lspci) if present.
+    - On Linux, fallback hardware scan uses C(lspci) if present, then C(/sys/bus/pci/devices/) when C(lspci) is unavailable (Alpine, containers, minimal installs).
     - On Windows, the module reads display adapters from C(Get-PnpDevice -Class Display) and enriches matching devices with C(Win32_VideoController).
     - On Windows, generic names such as C(Microsoft Basic Display Adapter) may be replaced with a bus-reported device description, a device description, or a PCI vendor/device lookup result.
     - On Windows, PCI-based vendor detection can still work even when no vendor driver utility is installed.
@@ -180,6 +180,7 @@ _PCI_VENDOR_MAP = {
 }
 
 _PCI_LOOKUP_CACHE = None
+_SYSFS_PCI_PATH = '/sys/bus/pci/devices'
 
 
 def _safe_int(value, default=None):
@@ -509,6 +510,65 @@ def _scan_linux_lspci(module, errors):
     return gpus
 
 
+def _scan_linux_sysfs(errors):
+    """GPU scanner using /sys/bus/pci/devices/ - works without pciutils."""
+    if not os.path.isdir(_SYSFS_PCI_PATH):
+        errors.append('sysfs unavailable: ' + _SYSFS_PCI_PATH + ' not found')
+        return []
+
+    try:
+        entries = sorted(os.listdir(_SYSFS_PCI_PATH))
+    except OSError as exc:
+        errors.append('sysfs scan failed: ' + str(exc))
+        return []
+
+    lookup = _get_pci_lookup()
+    _vendor_labels = {'10DE': 'NVIDIA', '1002': 'AMD', '8086': 'Intel'}
+    gpus = []
+
+    for addr in entries:
+        dev_path = os.path.join(_SYSFS_PCI_PATH, addr)
+        try:
+            with open(os.path.join(dev_path, 'class'), 'r') as fh:
+                pci_class = fh.read().strip()
+        except OSError:
+            continue
+
+        try:
+            class_val = int(pci_class, 16)
+        except ValueError:
+            continue
+        # PCI base class 0x03 = Display Controller (VGA, 3D, display)
+        if (class_val >> 16) != 0x03:
+            continue
+
+        try:
+            with open(os.path.join(dev_path, 'vendor'), 'r') as fh:
+                vendor_hex = fh.read().strip()
+            with open(os.path.join(dev_path, 'device'), 'r') as fh:
+                device_hex = fh.read().strip()
+        except OSError:
+            continue
+
+        try:
+            vendor_id = vendor_hex[2:].upper().zfill(4)
+            device_id = device_hex[2:].upper().zfill(4)
+        except (IndexError, ValueError):
+            continue
+
+        vendor_devices = lookup.get(vendor_id, {})
+        name = vendor_devices.get(device_id)
+        if not name:
+            label = _vendor_labels.get(vendor_id, 'Unknown')
+            name = label + ' GPU [' + vendor_id + ':' + device_id + ']'
+
+        gpu = _empty_gpu(len(gpus), name=name, vendor=_vendor_from_pci_vendor_id(vendor_id), method='sysfs')
+        gpu['pci_id'] = addr
+        gpus.append(gpu)
+
+    return gpus
+
+
 def _scan_windows_pnp(module, errors):
     script = (
         '$devices = Get-PnpDevice -Class Display -ErrorAction SilentlyContinue; '
@@ -732,7 +792,10 @@ def gather_gpu_facts(module):
         driver_gpus.extend(_detect_xpu_smi(module, errors))
 
     if system == 'Linux':
+        pre_error_len = len(errors)
         fallback = _scan_linux_lspci(module, errors)
+        if not fallback and len(errors) > pre_error_len:
+            fallback = _scan_linux_sysfs(errors)
     elif system == 'Windows':
         fallback = _scan_windows(module, errors)
     elif system == 'Darwin':

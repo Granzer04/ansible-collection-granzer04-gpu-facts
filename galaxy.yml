@@ -1,6 +1,6 @@
 namespace: granzer04
 name: gpu_facts
-version: 0.1.4
+version: 0.1.5
 readme: README.md
 authors:
   - Granzer04

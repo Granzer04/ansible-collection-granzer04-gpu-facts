@@ -3,6 +3,7 @@ from __future__ import absolute_import, division, print_function
 __metaclass__ = type
 
 import sys
+import shutil
 import tempfile
 import types
 from pathlib import Path
@@ -352,3 +353,67 @@ def test_scan_windows_uses_lookup_when_name_is_generic_amd():
     assert gpus[0]['vendor'] == 'amd'
     assert gpus[0]['name'] == 'AMD Radeon RX 7900 XTX'
     assert gpus[0]['resolved_name'] == 'AMD Radeon RX 7900 XTX'
+
+
+def test_scan_linux_sysfs_reads_pci_class_filtered_devices():
+    original_path = gpu_facts._SYSFS_PCI_PATH
+    original_get_lookup = gpu_facts._get_pci_lookup
+
+    sysfs_root = Path(tempfile.mkdtemp())
+    # GPU: NVIDIA RTX 4090 (3D controller, class 0x030200)
+    # Use underscore form for dir names — colons are invalid on Windows
+    gpu_dev = sysfs_root / '0000_01_00.0'
+    gpu_dev.mkdir()
+    (gpu_dev / 'class').write_text('0x030200\n')
+    (gpu_dev / 'vendor').write_text('0x10de\n')
+    (gpu_dev / 'device').write_text('0x2684\n')
+    # Non-GPU: network controller (class 0x020000) - must be filtered out
+    net_dev = sysfs_root / '0000_02_00.0'
+    net_dev.mkdir()
+    (net_dev / 'class').write_text('0x020000\n')
+
+    try:
+        gpu_facts._SYSFS_PCI_PATH = str(sysfs_root)
+        gpu_facts._get_pci_lookup = lambda: {'10DE': {'2684': 'NVIDIA GeForce RTX 4090'}}
+        errors = []
+        gpus = gpu_facts._scan_linux_sysfs(errors)
+    finally:
+        gpu_facts._SYSFS_PCI_PATH = original_path
+        gpu_facts._get_pci_lookup = original_get_lookup
+        shutil.rmtree(str(sysfs_root), ignore_errors=True)
+
+    assert errors == []
+    assert len(gpus) == 1
+    assert gpus[0]['name'] == 'NVIDIA GeForce RTX 4090'
+    assert gpus[0]['vendor'] == 'nvidia'
+    assert gpus[0]['detection_method'] == 'sysfs'
+    assert gpus[0]['pci_id'] == '0000_01_00.0'
+
+
+def test_scan_linux_sysfs_fallback_name_when_lookup_misses():
+    original_path = gpu_facts._SYSFS_PCI_PATH
+    original_get_lookup = gpu_facts._get_pci_lookup
+
+    sysfs_root = Path(tempfile.mkdtemp())
+    gpu_dev = sysfs_root / '0000_03_00.0'
+    gpu_dev.mkdir()
+    (gpu_dev / 'class').write_text('0x030000\n')
+    (gpu_dev / 'vendor').write_text('0x1002\n')   # AMD
+    (gpu_dev / 'device').write_text('0xaaaa\n')   # unknown device ID
+
+    try:
+        gpu_facts._SYSFS_PCI_PATH = str(sysfs_root)
+        gpu_facts._get_pci_lookup = lambda: {}
+        errors = []
+        gpus = gpu_facts._scan_linux_sysfs(errors)
+    finally:
+        gpu_facts._SYSFS_PCI_PATH = original_path
+        gpu_facts._get_pci_lookup = original_get_lookup
+        shutil.rmtree(str(sysfs_root), ignore_errors=True)
+
+    assert errors == []
+    assert len(gpus) == 1
+    assert gpus[0]['vendor'] == 'amd'
+    assert '1002' in gpus[0]['name']
+    assert 'AAAA' in gpus[0]['name']
+    assert gpus[0]['detection_method'] == 'sysfs'
